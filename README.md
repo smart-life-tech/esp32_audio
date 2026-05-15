@@ -150,6 +150,33 @@ All requested functional blocks are implemented in [src/main.cpp](src/main.cpp):
   - select active relay source
   - write active volume (or mute code when muted state is persisted)
 
+### MAS6116 Initialization Verification on Boot
+
+- This firmware verifies MAS6116 register response during boot after initial volume write.
+- Added helper functions:
+  - `masReadAddress(reg)`: builds the MAS6116 read address byte (read bit set).
+  - `readMasVolume(reg)`: performs SPI readback of a selected MAS6116 register.
+- Verification flow in `setup()`:
+  - Write startup volume (or mute code `171` when muted state is restored).
+  - Wait 10 ms for device settling.
+  - Read back left (CR2) and right (CR1) gain registers.
+  - Compare both read values against expected startup code.
+
+Example boot log when verification passes:
+
+```text
+[time] MAS6116: verifying initialization...
+[time] MAS6116: VERIFIED - Left=120, Right=120 (expected=120)
+```
+
+Example boot log when verification fails:
+
+```text
+[time] MAS6116: ERROR - Left=255, Right=255 (expected=120) - CHIP MAY BE OFFLINE
+```
+
+If readback values do not match expected startup volume, serial logs clearly indicate a potential wiring, power, or chip-communication issue.
+
 ### Peak Detector and Status Registers
 
 - Datasheet includes:
