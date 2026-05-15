@@ -33,6 +33,9 @@ All requested functional blocks are implemented in [src/main.cpp](src/main.cpp):
 - D7 = Relay 6 = Tuner
 - D8 = Relay 7 = Tape 1
 - D9 = Relay 8 = Tape 2
+- Relay drive mode for ULN2003 is inverted/active-low:
+  - selected input relay pin = LOW
+  - all non-selected relay pins = HIGH
 
 ### Infrared Input
 
@@ -265,6 +268,56 @@ Configured in [platformio.ini](platformio.ini):
   - `adafruit/Adafruit ILI9341`
   - `z3t0/IRremote`
 
+## Arduino IDE Setup and Upload (Client Workflow)
+
+This project can be used directly in Arduino IDE 2.x for clients who do not use PlatformIO.
+
+### 1. Install Arduino IDE and Board Support
+
+- Install Arduino IDE 2.x.
+- Open Arduino IDE -> Board Manager.
+- Install ESP32 board support that includes Arduino Nano ESP32.
+- Select board: Arduino Nano ESP32.
+
+### 2. Install Required Libraries (Library Manager)
+
+- Adafruit GFX Library
+- Adafruit ILI9341
+- IRremote (version compatible with `#include <IRremote.hpp>` and RC5 decode)
+
+`Preferences.h` and `SPI.h` are part of the ESP32 Arduino core and do not require separate installation.
+
+### 3. Import Firmware into Arduino IDE
+
+- Create a new sketch folder (example: `esp32_audio`).
+- Copy the full content of `src/main.cpp` into your sketch `.ino` file.
+- Keep all pin mappings and constants unchanged unless your hardware wiring differs.
+
+### 4. Verify Critical Relay Logic for ULN2003
+
+For ULN2003 relay boards, control is inverted and this firmware already matches that requirement:
+
+- active source relay output is LOW
+- all inactive source relay outputs are HIGH
+
+In code this is defined as:
+
+- `kRelayOnLevel = LOW`
+- `kRelayOffLevel = HIGH`
+
+This ensures all not-enabled inputs stay high, and only the selected input is driven low.
+
+### 5. Compile and Upload
+
+- Connect Arduino Nano ESP32 over USB.
+- Choose the correct COM port in Arduino IDE.
+- Click Verify, then Upload.
+
+### 6. Serial Monitor (Debug)
+
+- Open Serial Monitor at 115200 baud.
+- On boot you should see startup logs, IR command logs, and MAS6116 initialization verification messages.
+
 ## Source of Truth
 
 - Request text: [request.md](request.md)
@@ -274,4 +327,5 @@ Configured in [platformio.ini](platformio.ini):
 ## Notes
 
 - The HSD028309 panel is handled using the ILI9341 SPI driver stack, which matches common 2.8 inch TFT modules in this class.
-- Relay logic is currently configured as active-low (`kRelayOnLevel = LOW`, `kRelayOffLevel = HIGH`). If your relay board is active-high, swap those constants.
+- Relay logic is configured as active-low (`kRelayOnLevel = LOW`, `kRelayOffLevel = HIGH`) to support ULN2003-style inverted relay drive.
+- If a different relay board requires active-high control, swap those constants.
