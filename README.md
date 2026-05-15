@@ -79,6 +79,103 @@ All requested functional blocks are implemented in [src/main.cpp](src/main.cpp):
 - Volume code range is constrained to `0..234`.
 - The displayed dB value is computed from the code in 0.5 dB steps.
 
+### MAS6116 General Description (Datasheet-Based)
+
+- MAS6116 is a stereo digital volume controller for analog audio channels.
+- Left and right channels can be programmed independently.
+- Gain range per channel is from -111.5 dB to +15.5 dB in 0.5 dB steps.
+- Code 00HEX is the chip mute value (maximum attenuation).
+- Device supply is single +5 V while analog signal handling supports high-level input signals.
+
+### Gain Code Mapping
+
+- Gain is mapped as:
+  - Gain(dB) = +15.5 - (0.5 x code)
+- Examples:
+  - code 255 -> +15.5 dB
+  - code 224 -> 0.0 dB
+  - code 2 -> -111.0 dB
+  - code 1 -> -111.5 dB
+  - code 0 -> Mute
+
+### Why This Project Uses Code 171 for Mute Behavior
+
+- Your requested behavior is mute to -70 dB, not full chip mute.
+- In this firmware, mute is implemented by writing gain code 171 to both channels.
+- This gives:
+  - +15.5 - (0.5 x 171) = -70.0 dB
+- On unmute, the previously active per-source volume is restored exactly.
+
+### Serial Interface Details
+
+- MAS6116 serial control uses:
+  - DATA (bi-directional)
+  - XCS (chip select)
+  - CCLK (clock)
+- A full register operation is 16 clock pulses while XCS is low:
+  - first byte: address/control
+  - second byte: data/control word
+- For write operations in this project:
+  - XCS goes low
+  - address byte is shifted in
+  - data byte is shifted in
+  - XCS returns high after bit 16
+- Shared bus behavior:
+  - DATA and CCLK can be common to multiple devices
+  - each MAS6116 responds only when its XCS is active
+
+### Zero-Cross and Timeout Behavior
+
+- Standard gain updates use zero-cross detection to reduce audible clicks.
+- Timeout logic ensures updates still complete even with no useful input signal.
+- Datasheet guidance indicates waiting for write completion or checking status before next update to avoid overwriting pending writes.
+- This project performs direct writes for responsive user interaction and keeps step changes small during normal control.
+
+### XMUTE Pin Behavior (Datasheet)
+
+- Datasheet behavior:
+  - XMUTE low mutes both channels.
+  - XMUTE high returns to previously programmed gain values.
+  - transitions use zero-cross and timeout handling internally.
+- Project behavior:
+  - this firmware does not use a dedicated XMUTE pin control path.
+  - instead, gain registers are written directly to enforce -70 dB mute target and exact restore behavior.
+
+### Operating Modes and Power-Up Notes
+
+- On power-up, MAS6116 internal reset initializes control registers.
+- Channel activation in normal operation requires valid gain values and mute release conditions per datasheet.
+- In this firmware, startup sequence is:
+  - load persisted state
+  - select active relay source
+  - write active volume (or mute code when muted state is persisted)
+
+### Peak Detector and Status Registers
+
+- Datasheet includes:
+  - peak detector reference register (CR3)
+  - peak detector status register (CR4)
+  - write-operation status register (CR6)
+- Current firmware scope:
+  - implements source and volume control only
+  - does not currently read peak detector or CR6 write status bits
+
+### Register and Command Summary (Relevant to This Project)
+
+- Gain registers:
+  - CR2 Left gain
+  - CR1 Right gain
+- Address byte bit 2 selects read/write:
+  - 1 = read
+  - 0 = write
+- This project writes left and right channel gains as separate writes in one transaction sequence.
+
+### Test Register Caution
+
+- MAS6116 test register CR5 is intended for internal test use only.
+- Datasheet recommends keeping CR5 at default 00HEX in normal operation.
+- This project does not modify test mode settings.
+
 ### Mute/Unmute
 
 - On mute:
