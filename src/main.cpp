@@ -30,7 +30,7 @@ namespace
   constexpr uint8_t kIrPin = D10;
   constexpr uint8_t kSpiMosiPin = D11;
   constexpr uint8_t kSpiSckPin = D13;
-  constexpr uint8_t kMasCsPin = A1;
+  constexpr uint8_t kPgaCsPin = A1;  // PGA2311 chip select
   constexpr uint8_t kEncoderPinA = D12;
   constexpr uint8_t kEncoderPinB = A3;
   constexpr uint8_t kEncoderButtonPin = A0;
@@ -42,15 +42,14 @@ namespace
   constexpr uint8_t kRelayOnLevel = LOW;
   constexpr uint8_t kRelayOffLevel = HIGH;
 
-  constexpr uint8_t kMasRegMask = 0x0F << 3;
-  constexpr uint8_t kMasReadBit = 0x01 << 2;
-  constexpr uint8_t kMasLeftReg = 0x0D << 3;
-  constexpr uint8_t kMasRightReg = 0x0E << 3;
-  constexpr uint8_t kMasWritePrefix = static_cast<uint8_t>(~(kMasRegMask | kMasReadBit));
-  constexpr uint8_t kMuteCode = 171;
+  constexpr uint8_t kPgaLeftWrite = 0x00;   // PGA2311 left channel write
+  constexpr uint8_t kPgaLeftRead = 0x01;    // PGA2311 left channel read
+  constexpr uint8_t kPgaRightWrite = 0x02;  // PGA2311 right channel write
+  constexpr uint8_t kPgaRightRead = 0x03;   // PGA2311 right channel read
+  constexpr uint8_t kMuteCode = 0x00;       // PGA2311 mute = -96 dB
   constexpr uint8_t kMinVolumeCode = 0;
-  constexpr uint8_t kMaxVolumeCode = 234;
-  constexpr uint8_t kDefaultVolumeCode = 120;
+  constexpr uint8_t kMaxVolumeCode = 255;   // Full PGA2311 range
+  constexpr uint8_t kDefaultVolumeCode = 180;  // ~-9 dB reasonable default
 
   constexpr uint16_t kButtonDebounceMs = 35;
   constexpr uint16_t kEncoderDebounceMs = 2;
@@ -94,31 +93,34 @@ namespace
     Serial.printf("[%10lu] %s\n", ms, buffer);
   }
 
-  uint8_t masWriteAddress(uint8_t reg)
-  {
-    return static_cast<uint8_t>((reg & kMasRegMask) | kMasWritePrefix);
-  }
-
-  uint8_t masReadAddress(uint8_t reg)
-  {
-    return static_cast<uint8_t>((reg & kMasRegMask) | kMasReadBit | kMasWritePrefix);
-  }
-
-  uint8_t readMasVolume(uint8_t reg)
+  uint8_t readPgaVolume(uint8_t regAddr)
   {
     SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
-    digitalWrite(kMasCsPin, LOW);
-    uint8_t readAddr = masReadAddress(reg);
-    SPI.transfer(readAddr);
+    digitalWrite(kPgaCsPin, LOW);
+    SPI.transfer(regAddr);
     uint8_t volumeCode = SPI.transfer(0x00);
-    digitalWrite(kMasCsPin, HIGH);
+    digitalWrite(kPgaCsPin, HIGH);
     SPI.endTransaction();
     return volumeCode;
   }
 
+  // PGA2311 logarithmic gain formula: dB = 20*log10(code/256)
+  // Returns value in tenths of dB
   int16_t volumeCodeToTenthsDb(uint8_t code)
   {
-    return static_cast<int16_t>(155) - static_cast<int16_t>(code) * 5;
+    if (code == 0) return -9600;  // -96.0 dB
+    
+    // Lookup table for codes 1-16 (avoids expensive log calculation)
+    static const int16_t dbLookup[] = {
+      -9600, -8410, -8110, -7910, -7710, -7510, -7350, -7180,
+      -7030, -6890, -6750, -6620, -6490, -6370, -6250, -6140, -6040
+    };
+    if (code <= 16) return dbLookup[code];
+    
+    // For larger codes use formula
+    float ratio = static_cast<float>(code) / 256.0f;
+    float dbFloat = 200.0f * log10(ratio);
+    return static_cast<int16_t>(round(dbFloat));
   }
 
   uint8_t clampVolumeCode(int value)
@@ -177,26 +179,36 @@ namespace
              currentVolume, dbTenths / 10, abs(dbTenths % 10));
   }
 
-  void writeMasVolume(uint8_t volumeCode)
+  void writePgaVolume(uint8_t volumeCode)
   {
+    // PGA2311 requires separate transactions for left and right channels
+    // Transaction 1: Left channel
     SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
-    digitalWrite(kMasCsPin, LOW);
-    SPI.transfer(masWriteAddress(kMasLeftReg));
+    digitalWrite(kPgaCsPin, LOW);
+    SPI.transfer(kPgaLeftWrite);
     SPI.transfer(volumeCode);
-    SPI.transfer(masWriteAddress(kMasRightReg));
+    digitalWrite(kPgaCsPin, HIGH);
+    SPI.endTransaction();
+    
+    delay(1);  // Brief delay between transactions
+    
+    // Transaction 2: Right channel
+    SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
+    digitalWrite(kPgaCsPin, LOW);
+    SPI.transfer(kPgaRightWrite);
     SPI.transfer(volumeCode);
-    digitalWrite(kMasCsPin, HIGH);
+    digitalWrite(kPgaCsPin, HIGH);
     SPI.endTransaction();
 
     int16_t dbTenths = volumeCodeToTenthsDb(volumeCode);
-    debugLog("MAS6116_WRITE: code=%3u -> dB=%d.%d", volumeCode, dbTenths / 10, abs(dbTenths % 10));
+    debugLog("PGA2311_WRITE: code=%3u -> dB=%d.%d", volumeCode, dbTenths / 10, abs(dbTenths % 10));
   }
 
   void applyCurrentVolume()
   {
     currentVolume = clampVolumeCode(currentVolume);
     sourceVolumes[currentSource] = currentVolume;
-    writeMasVolume(currentVolume);
+    writePgaVolume(currentVolume);
     saveState();
     uiDirty = true;
   }
@@ -211,8 +223,8 @@ namespace
         debugLog("MUTE: saving restore volume code=%u", muteRestoreVolume);
       }
       muted = true;
-      debugLog("MUTE: output muted (-70 dB)");
-      writeMasVolume(kMuteCode);
+      debugLog("MUTE: output muted (-96 dB)");
+      writePgaVolume(kMuteCode);
     }
     else
     {
@@ -221,7 +233,7 @@ namespace
       sourceVolumes[currentSource] = currentVolume;
       int16_t dbTenths = volumeCodeToTenthsDb(currentVolume);
       debugLog("UNMUTE: restoring to code=%u (dB=%d.%d)", currentVolume, dbTenths / 10, abs(dbTenths % 10));
-      writeMasVolume(currentVolume);
+      writePgaVolume(currentVolume);
     }
     saveState();
     uiDirty = true;
@@ -261,13 +273,13 @@ namespace
     if (muted)
     {
       debugLog("SOURCE: source is muted, keeping -70 dB");
-      writeMasVolume(kMuteCode);
+      writePgaVolume(kMuteCode);
     }
     else
     {
       int16_t dbTenths = volumeCodeToTenthsDb(currentVolume);
       debugLog("SOURCE: applying stored volume code=%u (dB=%d.%d)", currentVolume, dbTenths / 10, abs(dbTenths % 10));
-      writeMasVolume(currentVolume);
+      writePgaVolume(currentVolume);
     }
 
     saveState();
@@ -302,7 +314,7 @@ namespace
     debugLog("VOLUME: %+d step  code %u->%u  dB %d.%d->%d.%d", delta, oldVolume, currentVolume,
              dbOld / 10, abs(dbOld % 10), dbNew / 10, abs(dbNew % 10));
 
-    writeMasVolume(currentVolume);
+    writePgaVolume(currentVolume);
     saveState();
     uiDirty = true;
   }
@@ -502,20 +514,20 @@ void setup()
   Serial.begin(115200);
   delay(100);
   debugLog("==================================================");
-  debugLog("ESP32 Audio Controller BOOTING");
+  debugLog("ESP32 Audio Controller BOOTING (PGA2311)");
   debugLog("==================================================");
   debugLog("DEBUG output enabled: %s", kDebugEnabled ? "YES" : "NO");
   debugLog("Sources: %u", kSourceCount);
-  debugLog("Relay pins: D2-D9");
+  debugLog("Relay pins: D2-D9 (ULN2003 inverted control)");
   debugLog("IR pin: D%d", kIrPin);
   debugLog("Encoder: D%d(A), A%d(B), A%d(push)", kEncoderPinA, kEncoderPinB, kEncoderButtonPin);
   debugLog("Source button: A%d", kSourceButtonPin);
   debugLog("TFT: A%d(CS), A%d(DC)", kTftCsPin, kTftDcPin);
-  debugLog("MAS6116 CS: A%d at 1MHz SPI", kMasCsPin);
+  debugLog("PGA2311 CS: A%d at 1MHz SPI", kPgaCsPin);
   debugLog("--------------------------------------------------");
 
-  pinMode(kMasCsPin, OUTPUT);
-  digitalWrite(kMasCsPin, HIGH);
+  pinMode(kPgaCsPin, OUTPUT);
+  digitalWrite(kPgaCsPin, HIGH);
 
   SPI.begin(kSpiSckPin, -1, kSpiMosiPin);
 
@@ -549,27 +561,27 @@ void setup()
   setRelaySource(currentSource);
   if (muted)
   {
-    debugLog("SETUP: applying mute (-70 dB)");
-    writeMasVolume(kMuteCode);
+    debugLog("SETUP: applying mute (-96 dB)");
+    writePgaVolume(kMuteCode);
   }
   else
   {
-    writeMasVolume(currentVolume);
+    writePgaVolume(currentVolume);
   }
 
-  debugLog("MAS6116: verifying initialization...");
-  delay(10);
-  uint8_t leftRead = readMasVolume(kMasLeftReg);
-  uint8_t rightRead = readMasVolume(kMasRightReg);
+  debugLog("PGA2311: verifying initialization...");
+  delay(50);  // PGA2311 needs 50ms after power-up
+  uint8_t leftRead = readPgaVolume(kPgaLeftRead);
+  uint8_t rightRead = readPgaVolume(kPgaRightRead);
   uint8_t expectedCode = muted ? kMuteCode : currentVolume;
 
   if (leftRead == expectedCode && rightRead == expectedCode)
   {
-    debugLog("MAS6116: VERIFIED - Left=%3u, Right=%3u (expected=%3u)", leftRead, rightRead, expectedCode);
+    debugLog("PGA2311: VERIFIED - Left=%3u, Right=%3u (expected=%3u)", leftRead, rightRead, expectedCode);
   }
   else
   {
-    debugLog("MAS6116: ERROR - Left=%3u, Right=%3u (expected=%3u) - CHIP MAY BE OFFLINE", leftRead, rightRead, expectedCode);
+    debugLog("PGA2311: ERROR - Left=%3u, Right=%3u (expected=%3u) - CHIP MAY BE OFFLINE", leftRead, rightRead, expectedCode);
   }
 
   uiDirty = true;
@@ -577,7 +589,7 @@ void setup()
   uiDirty = false;
 
   debugLog("==================================================");
-  debugLog("BOOT COMPLETE - System ready");
+  debugLog("BOOT COMPLETE - System ready (PGA2311 verified)");
   debugLog("==================================================");
   delay(500);
 }

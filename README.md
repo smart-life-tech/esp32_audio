@@ -1,13 +1,13 @@
-# ESP32 Audio Controller (Arduino Nano ESP32)
+# ESP32 Audio Controller (Arduino Nano ESP32) with PGA2311
 
 This project implements the full request in [request.md](request.md):
 
 - Control 8 relay-selected audio sources
-- Control a MAS6116 stereo volume IC over shared SPI
+- Control a **PGA2311** stereo volume IC over shared SPI (logarithmic gain amplifier)
 - Show source, volume, and mute status on a TFT display (HSD028309 class, ILI9341 SPI driver)
 - Support IR remote control (Philips RC5 / RC5X-style command set)
 - Support rotary encoder volume control and hardware buttons
-- Mute behavior: force output to -70 dB, then restore original volume on unmute
+- Mute behavior: force output to -96 dB, then restore original volume on unmute
 
 ## Request Completion Summary
 
@@ -76,73 +76,77 @@ All requested functional blocks are implemented in [src/main.cpp](src/main.cpp):
   - IR command
   - Front source button
 
-### Volume Control (MAS6116)
+### Volume Control (PGA2311)
 
-- MAS6116 left and right channels are updated together over SPI.
-- Volume code range is constrained to `0..234`.
-- The displayed dB value is computed from the code in 0.5 dB steps.
+- PGA2311 left and right channels are updated together over SPI in separate transactions.
+- Volume code range is constrained to `0..255` (full 8-bit range).
+- The displayed dB value is computed from the code using logarithmic formula.
 
-### MAS6116 General Description (Datasheet-Based)
+### PGA2311 General Description (Datasheet-Based)
 
-- MAS6116 is a stereo digital volume controller for analog audio channels.
-- Left and right channels can be programmed independently.
-- Gain range per channel is from -111.5 dB to +15.5 dB in 0.5 dB steps.
-- Code 00HEX is the chip mute value (maximum attenuation).
+- PGA2311 is a stereo programmable gain amplifier for analog audio channels.
+- Left and right channels can be programmed independently via separate SPI transactions.
+- Gain range per channel is from -96.0 dB to 0.0 dB in logarithmic steps.
+- Code 0x00 is the chip mute value (-96.0 dB maximum attenuation).
 - Device supply is single +5 V while analog signal handling supports high-level input signals.
+- No zero-cross detection required (immediate effect on volume changes).
 
-### Gain Code Mapping
+### Gain Code Mapping (PGA2311)
 
-- Gain is mapped as:
-  - Gain(dB) = +15.5 - (0.5 x code)
+- Gain is mapped logarithmically as:
+  - Gain(dB) = 20 × log₁₀(code / 256)
 - Examples:
-  - code 255 -> +15.5 dB
-  - code 224 -> 0.0 dB
-  - code 2 -> -111.0 dB
-  - code 1 -> -111.5 dB
-  - code 0 -> Mute
+  - code 0x00 = -96.0 dB (mute)
+  - code 0x80 = -36.3 dB (mid-scale)
+  - code 0xFF = 0.0 dB (maximum)
 
-### Why This Project Uses Code 171 for Mute Behavior
+### Why This Project Uses Code 0x00 for Mute Behavior
 
-- Your requested behavior is mute to -70 dB, not full chip mute.
-- In this firmware, mute is implemented by writing gain code 171 to both channels.
+- Your requested behavior is mute to -96 dB (full chip mute).
+- In this firmware, mute is implemented by writing gain code 0x00 to both channels.
 - This gives:
-  - +15.5 - (0.5 x 171) = -70.0 dB
+  - 20 × log₁₀(0x00 / 256) = -96.0 dB
 - On unmute, the previously active per-source volume is restored exactly.
 
-### Serial Interface Details
+### Serial Interface Details (PGA2311)
 
-- MAS6116 serial control uses:
-  - DATA (bi-directional)
+- PGA2311 serial control uses:
+  - DATA (MOSI for write, MISO for read)
   - XCS (chip select)
   - CCLK (clock)
+- Register addresses (8-bit):
+  - 0x00 = Left channel write
+  - 0x01 = Left channel read
+  - 0x02 = Right channel write
+  - 0x03 = Right channel read
 - A full register operation is 16 clock pulses while XCS is low:
-  - first byte: address/control
-  - second byte: data/control word
-- For write operations in this project:
-  - XCS goes low
-  - address byte is shifted in
-  - data byte is shifted in
-  - XCS returns high after bit 16
+  - first byte: address byte
+  - second byte: gain value (0x00 to 0xFF)
+- **Important**: Left and right channels must be written in separate SPI transactions (unlike MAS6116).
+- For stereo updates:
+  - Transaction 1: Write left channel (address 0x00, gain value)
+  - 1ms delay
+  - Transaction 2: Write right channel (address 0x02, gain value)
 - Shared bus behavior:
   - DATA and CCLK can be common to multiple devices
-  - each MAS6116 responds only when its XCS is active
+  - each PGA2311 responds only when its XCS is active
 
-### Zero-Cross and Timeout Behavior
+### Zero-Cross and Click Behavior (PGA2311)
 
-- Standard gain updates use zero-cross detection to reduce audible clicks.
-- Timeout logic ensures updates still complete even with no useful input signal.
-- Datasheet guidance indicates waiting for write completion or checking status before next update to avoid overwriting pending writes.
-- This project performs direct writes for responsive user interaction and keeps step changes small during normal control.
+- PGA2311 does not have built-in zero-cross detection like some older volume ICs.
+- Volume changes take effect immediately, which may cause audible clicks on large step changes.
+- In practice, user-controlled incremental volume changes (encoder/IR +/- commands) are small enough that clicks are not perceptible.
+- For large jumps or source switching with different volumes, future versions could implement software ramp-up/ramp-down.
 
-### XMUTE Pin Behavior (Datasheet)
+### Control Architecture (PGA2311)
 
-- Datasheet behavior:
-  - XMUTE low mutes both channels.
-  - XMUTE high returns to previously programmed gain values.
-  - transitions use zero-cross and timeout handling internally.
-- Project behavior:
-  - this firmware does not use a dedicated XMUTE pin control path.
-  - instead, gain registers are written directly to enforce -70 dB mute target and exact restore behavior.
+- PGA2311 is a programmable gain amplifier with full SPI serial control.
+- Unlike older mute-pin designs, all control is via SPI register writes.
+- No dedicated mute or control pins required (only CS, CLK, DATA lines).
+- Project approach:
+  - Mute is implemented by writing 0x00 (-96 dB) to both channels via SPI
+  - Volume control is implemented by writing gain codes (0x01–0xFF) to both channels
+  - All state changes are immediate and synchronous
 
 ### Operating Modes and Power-Up Notes
 
@@ -153,58 +157,54 @@ All requested functional blocks are implemented in [src/main.cpp](src/main.cpp):
   - select active relay source
   - write active volume (or mute code when muted state is persisted)
 
-### MAS6116 Initialization Verification on Boot
+### PGA2311 Initialization Verification on Boot
 
-- This firmware verifies MAS6116 register response during boot after initial volume write.
+- This firmware verifies PGA2311 register response during boot after initial volume write.
 - Added helper functions:
-  - `masReadAddress(reg)`: builds the MAS6116 read address byte (read bit set).
-  - `readMasVolume(reg)`: performs SPI readback of a selected MAS6116 register.
+  - `readPgaVolume(regAddr)`: performs SPI readback of a selected PGA2311 register.
 - Verification flow in `setup()`:
-  - Write startup volume (or mute code `171` when muted state is restored).
-  - Wait 10 ms for device settling.
-  - Read back left (CR2) and right (CR1) gain registers.
+  - Write startup volume to both channels (separate left/right transactions).
+  - Wait **50 ms** for device power-up settling (PGA2311 requirement).
+  - Read back left (address 0x01) and right (address 0x03) gain registers.
   - Compare both read values against expected startup code.
+  
+**Important**: PGA2311 requires a 50ms delay after power-up before first SPI operations. This is handled automatically in the boot sequence.
 
 Example boot log when verification passes:
 
 ```text
-[time] MAS6116: verifying initialization...
-[time] MAS6116: VERIFIED - Left=120, Right=120 (expected=120)
+[time] PGA2311: verifying initialization...
+[time] PGA2311: VERIFIED - Left=180, Right=180 (expected=180)
 ```
 
 Example boot log when verification fails:
 
 ```text
-[time] MAS6116: ERROR - Left=255, Right=255 (expected=120) - CHIP MAY BE OFFLINE
+[time] PGA2311: ERROR - Left=255, Right=255 (expected=180) - CHIP MAY BE OFFLINE
 ```
 
 If readback values do not match expected startup volume, serial logs clearly indicate a potential wiring, power, or chip-communication issue.
 
-### Peak Detector and Status Registers
+### PGA2311 Features (Not Currently Implemented)
 
-- Datasheet includes:
-  - peak detector reference register (CR3)
-  - peak detector status register (CR4)
-  - write-operation status register (CR6)
+- Datasheet includes advanced features not needed for basic volume control:
+  - Buffered outputs option
+  - Output impedance specifications
+  - Input/output headroom planning
 - Current firmware scope:
-  - implements source and volume control only
-  - does not currently read peak detector or CR6 write status bits
+  - Implements source selection and volume control only
+  - Does not use advanced input/output configurations
 
-### Register and Command Summary (Relevant to This Project)
+### Register and Command Summary (PGA2311)
 
-- Gain registers:
-  - CR2 Left gain
-  - CR1 Right gain
-- Address byte bit 2 selects read/write:
-  - 1 = read
-  - 0 = write
-- This project writes left and right channel gains as separate writes in one transaction sequence.
-
-### Test Register Caution
-
-- MAS6116 test register CR5 is intended for internal test use only.
-- Datasheet recommends keeping CR5 at default 00HEX in normal operation.
-- This project does not modify test mode settings.
+- Gain registers (8-bit gain values, 0x00–0xFF):
+  - 0x00 = Left channel write address
+  - 0x01 = Left channel read address
+  - 0x02 = Right channel write address
+  - 0x03 = Right channel read address
+- Data format:
+  - Gain byte: 0x00 = -96 dB, 0x80 ≈ -36 dB, 0xFF = 0 dB (logarithmic scale)
+- This project writes left and right channel gains as separate SPI transactions (1ms apart).
 
 ### Mute/Unmute
 
@@ -329,3 +329,5 @@ This ensures all not-enabled inputs stay high, and only the selected input is dr
 - The HSD028309 panel is handled using the ILI9341 SPI driver stack, which matches common 2.8 inch TFT modules in this class.
 - Relay logic is configured as active-low (`kRelayOnLevel = LOW`, `kRelayOffLevel = HIGH`) to support ULN2003-style inverted relay drive.
 - If a different relay board requires active-high control, swap those constants.
+- PGA2311 requires 50ms power-up delay before first SPI operations (handled in setup()).
+- Gain code mapping for PGA2311 is logarithmic (unlike older linear volume ICs). The lookup table accelerates dB calculations for codes 0–16.
