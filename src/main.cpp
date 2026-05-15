@@ -8,6 +8,9 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_ILI9341.h>
 
+// Debug configuration
+const bool kDebugEnabled = true;  // Set to false to disable all debug output
+
 namespace {
 
 constexpr uint8_t kSourceCount = 8;
@@ -75,8 +78,35 @@ struct DebouncedButton {
 DebouncedButton encoderButton{kEncoderButtonPin, HIGH, HIGH, 0};
 DebouncedButton sourceButton{kSourceButtonPin, HIGH, HIGH, 0};
 
+// Debug helper function
+void debugLog(const char *format, ...) {
+  if (!kDebugEnabled) return;
+  char buffer[256];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(buffer, sizeof(buffer), format, args);
+  va_end(args);
+  uint32_t ms = millis();
+  Serial.printf("[%10lu] %s\n", ms, buffer);
+}
+
 uint8_t masWriteAddress(uint8_t reg) {
   return static_cast<uint8_t>((reg & kMasRegMask) | kMasWritePrefix);
+}
+
+uint8_t masReadAddress(uint8_t reg) {
+  return static_cast<uint8_t>((reg & kMasRegMask) | kMasReadBit | kMasWritePrefix);
+}
+
+uint8_t readMasVolume(uint8_t reg) {
+  SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
+  digitalWrite(kMasCsPin, LOW);
+  uint8_t readAddr = masReadAddress(reg);
+  SPI.transfer(readAddr);
+  uint8_t volumeCode = SPI.transfer(0x00);
+  digitalWrite(kMasCsPin, HIGH);
+  SPI.endTransaction();
+  return volumeCode;
 }
 
 int16_t volumeCodeToTenthsDb(uint8_t code) {
@@ -98,6 +128,7 @@ void saveState() {
   preferences.putUChar("source", currentSource);
   preferences.putBool("muted", muted);
   preferences.putUChar("muteRestore", muteRestoreVolume);
+  debugLog("PERSIST: state saved (src=%u muted=%s vol=%u)", currentSource, muted ? "yes" : "no", currentVolume);
 }
 
 void loadState() {
@@ -107,16 +138,25 @@ void loadState() {
 
   if (preferences.getBytesLength("vols") == sizeof(sourceVolumes)) {
     preferences.getBytes("vols", sourceVolumes, sizeof(sourceVolumes));
+    debugLog("PERSIST: loaded 8 source volumes from NVS");
+  } else {
+    debugLog("PERSIST: no saved volumes found, using defaults");
   }
 
   currentSource = preferences.getUChar("source", 0);
   if (currentSource >= kSourceCount) {
+    debugLog("PERSIST: invalid source %u, defaulting to 0", currentSource);
     currentSource = 0;
   }
 
   muted = preferences.getBool("muted", false);
   muteRestoreVolume = preferences.getUChar("muteRestore", sourceVolumes[currentSource]);
   currentVolume = sourceVolumes[currentSource];
+  
+  int16_t dbTenths = volumeCodeToTenthsDb(currentVolume);
+  debugLog("PERSIST: restored state src=%u (%s) muted=%s code=%u (dB=%d.%d)", 
+           currentSource, kSourceNames[currentSource], muted ? "yes" : "no",
+           currentVolume, dbTenths / 10, abs(dbTenths % 10));
 }
 
 void writeMasVolume(uint8_t volumeCode) {
@@ -128,6 +168,9 @@ void writeMasVolume(uint8_t volumeCode) {
   SPI.transfer(volumeCode);
   digitalWrite(kMasCsPin, HIGH);
   SPI.endTransaction();
+  
+  int16_t dbTenths = volumeCodeToTenthsDb(volumeCode);
+  debugLog("MAS6116_WRITE: code=%3u -> dB=%d.%d", volumeCode, dbTenths / 10, abs(dbTenths % 10));
 }
 
 void applyCurrentVolume() {
@@ -142,13 +185,17 @@ void setMuted(bool shouldMute) {
   if (shouldMute) {
     if (!muted) {
       muteRestoreVolume = currentVolume;
+      debugLog("MUTE: saving restore volume code=%u", muteRestoreVolume);
     }
     muted = true;
+    debugLog("MUTE: output muted (-70 dB)");
     writeMasVolume(kMuteCode);
   } else {
     muted = false;
     currentVolume = clampVolumeCode(muteRestoreVolume);
     sourceVolumes[currentSource] = currentVolume;
+    int16_t dbTenths = volumeCodeToTenthsDb(currentVolume);
+    debugLog("UNMUTE: restoring to code=%u (dB=%d.%d)", currentVolume, dbTenths / 10, abs(dbTenths % 10));
     writeMasVolume(currentVolume);
   }
   saveState();
@@ -165,22 +212,28 @@ void setRelaySource(uint8_t sourceIndex) {
   }
 
   digitalWrite(kRelayPins[sourceIndex], kRelayOnLevel);
+  debugLog("Relay: activated source %u (%s) on pin D%d", sourceIndex, kSourceNames[sourceIndex], kRelayPins[sourceIndex]);
 }
 
 void setSource(uint8_t sourceIndex) {
   if (sourceIndex >= kSourceCount) {
+    debugLog("ERROR: source index %u out of range (0-%u)", sourceIndex, kSourceCount - 1);
     return;
   }
 
   currentSource = sourceIndex;
+  debugLog("SOURCE: switching to %s (index %u)", kSourceNames[currentSource], sourceIndex);
   setRelaySource(currentSource);
 
   currentVolume = sourceVolumes[currentSource];
   muteRestoreVolume = currentVolume;
 
   if (muted) {
+    debugLog("SOURCE: source is muted, keeping -70 dB");
     writeMasVolume(kMuteCode);
   } else {
+    int16_t dbTenths = volumeCodeToTenthsDb(currentVolume);
+    debugLog("SOURCE: applying stored volume code=%u (dB=%d.%d)", currentVolume, dbTenths / 10, abs(dbTenths % 10));
     writeMasVolume(currentVolume);
   }
 
@@ -198,11 +251,20 @@ void previousSource() {
 
 void changeVolume(int delta) {
   if (muted) {
+    debugLog("VOLUME: unmuting first (was at -70 dB)");
     setMuted(false);
+    return;  // Next encoder turn will adjust volume
   }
 
+  uint8_t oldVolume = currentVolume;
   currentVolume = clampVolumeCode(static_cast<int>(currentVolume) + delta);
   sourceVolumes[currentSource] = currentVolume;
+  
+  int16_t dbOld = volumeCodeToTenthsDb(oldVolume);
+  int16_t dbNew = volumeCodeToTenthsDb(currentVolume);
+  debugLog("VOLUME: %+d step  code %u->%u  dB %d.%d->%d.%d", delta, oldVolume, currentVolume, 
+           dbOld / 10, abs(dbOld % 10), dbNew / 10, abs(dbNew % 10));
+  
   writeMasVolume(currentVolume);
   saveState();
   uiDirty = true;
@@ -227,47 +289,62 @@ bool updateButton(DebouncedButton &button) {
 }
 
 void handleRc5Command(uint8_t command) {
+  debugLog("IR: RC5 command 0x%02X received", command);
   switch (command) {
     case 1:
+      debugLog("IR: -> select Phono");
       setSource(0);
       break;
     case 2:
+      debugLog("IR: -> select CD");
       setSource(1);
       break;
     case 3:
+      debugLog("IR: -> select Aux 1");
       setSource(2);
       break;
     case 4:
+      debugLog("IR: -> select Aux 2");
       setSource(3);
       break;
     case 5:
+      debugLog("IR: -> select DVD");
       setSource(4);
       break;
     case 6:
+      debugLog("IR: -> select Tuner");
       setSource(5);
       break;
     case 7:
+      debugLog("IR: -> select Tape 1");
       setSource(6);
       break;
     case 8:
+      debugLog("IR: -> select Tape 2");
       setSource(7);
       break;
     case 13:
+      debugLog("IR: -> toggle mute");
       toggleMute();
       break;
     case 16:
+      debugLog("IR: -> volume up");
       changeVolume(+1);
       break;
     case 17:
+      debugLog("IR: -> volume down");
       changeVolume(-1);
       break;
     case 26:
+      debugLog("IR: -> previous source");
       previousSource();
       break;
     case 27:
+      debugLog("IR: -> next source");
       nextSource();
       break;
     default:
+      debugLog("IR: -> unknown command (ignored)");
       break;
   }
 }
@@ -281,7 +358,11 @@ void pollIrReceiver() {
   if (data.protocol == RC5) {
     if (data.address == 0x10 || data.address == 0x14) {
       handleRc5Command(data.command & 0x3F);
+    } else {
+      debugLog("IR: RC5 address 0x%02X ignored (expected 0x10 or 0x14)", data.address);
     }
+  } else {
+    debugLog("IR: protocol %d received (not RC5, ignored)", data.protocol);
   }
 
   IrReceiver.resume();
@@ -291,9 +372,12 @@ void pollEncoder() {
   bool encoderA = digitalRead(kEncoderPinA);
   if (encoderA != encoderLastA) {
     if ((millis() - encoderLastMoveMs) >= kEncoderDebounceMs && encoderA == LOW) {
-      if (digitalRead(kEncoderPinB) == HIGH) {
+      bool encoderB = digitalRead(kEncoderPinB);
+      if (encoderB == HIGH) {
+        debugLog("ENCODER: CW (volume up)");
         changeVolume(+1);
       } else {
+        debugLog("ENCODER: CCW (volume down)");
         changeVolume(-1);
       }
       encoderLastMoveMs = millis();
@@ -340,10 +424,12 @@ void drawUi() {
 
 void pollButtons() {
   if (updateButton(encoderButton)) {
+    debugLog("BUTTON: encoder push detected (mute toggle)");
     toggleMute();
   }
 
   if (updateButton(sourceButton)) {
+    debugLog("BUTTON: source button detected (next source)");
     nextSource();
   }
 }
@@ -352,6 +438,19 @@ void pollButtons() {
 
 void setup() {
   Serial.begin(115200);
+  delay(100);
+  debugLog("==================================================");
+  debugLog("ESP32 Audio Controller BOOTING");
+  debugLog("==================================================");
+  debugLog("DEBUG output enabled: %s", kDebugEnabled ? "YES" : "NO");
+  debugLog("Sources: %u", kSourceCount);
+  debugLog("Relay pins: D2-D9");
+  debugLog("IR pin: D%d", kIrPin);
+  debugLog("Encoder: D%d(A), A%d(B), A%d(push)", kEncoderPinA, kEncoderPinB, kEncoderButtonPin);
+  debugLog("Source button: A%d", kSourceButtonPin);
+  debugLog("TFT: A%d(CS), A%d(DC)", kTftCsPin, kTftDcPin);
+  debugLog("MAS6116 CS: A%d at 1MHz SPI", kMasCsPin);
+  debugLog("--------------------------------------------------");
 
   pinMode(kMasCsPin, OUTPUT);
   digitalWrite(kMasCsPin, HIGH);
@@ -370,24 +469,48 @@ void setup() {
   pinMode(kIrPin, INPUT_PULLUP);
 
   preferences.begin("audioctl", false);
+  debugLog("Preferences: initialized NVS 'audioctl'");
   loadState();
 
+  debugLog("TFT: initializing display...");
   tft.begin();
   tft.setRotation(kDisplayRotation);
   tft.fillScreen(ILI9341_BLACK);
+  debugLog("TFT: display initialized");
 
+  debugLog("IR: initializing RC5 receiver...");
   IrReceiver.begin(kIrPin, DISABLE_LED_FEEDBACK);
+  debugLog("IR: receiver ready on D%d", kIrPin);
 
+  debugLog("Initializing audio path...");
   setRelaySource(currentSource);
   if (muted) {
+    debugLog("SETUP: applying mute (-70 dB)");
     writeMasVolume(kMuteCode);
   } else {
     writeMasVolume(currentVolume);
+  }
+  
+  debugLog("MAS6116: verifying initialization...");
+  delay(10);
+  uint8_t leftRead = readMasVolume(kMasLeftReg);
+  uint8_t rightRead = readMasVolume(kMasRightReg);
+  uint8_t expectedCode = muted ? kMuteCode : currentVolume;
+  
+  if (leftRead == expectedCode && rightRead == expectedCode) {
+    debugLog("MAS6116: VERIFIED - Left=%3u, Right=%3u (expected=%3u)", leftRead, rightRead, expectedCode);
+  } else {
+    debugLog("MAS6116: ERROR - Left=%3u, Right=%3u (expected=%3u) - CHIP MAY BE OFFLINE", leftRead, rightRead, expectedCode);
   }
 
   uiDirty = true;
   drawUi();
   uiDirty = false;
+  
+  debugLog("==================================================");
+  debugLog("BOOT COMPLETE - System ready");
+  debugLog("==================================================");
+  delay(500);
 }
 
 void loop() {
