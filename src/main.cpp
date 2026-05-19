@@ -459,16 +459,9 @@ namespace
   {
     tft.fillScreen(ILI9341_BLACK);
 
-    tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
-    tft.setTextSize(3);
-    tft.setCursor(12, 12);
-    tft.print("Source ");
-    tft.print(currentSource + 1);
-    tft.print("/8");
-
     tft.setTextColor(ILI9341_WHITE, ILI9341_BLACK);
-    tft.setTextSize(4);
-    tft.setCursor(12, 56);
+    tft.setTextSize(5);
+    tft.setCursor(12, 24);
     tft.print(kSourceNames[currentSource]);
 
     tft.setTextSize(3);
