@@ -315,8 +315,8 @@ This project can be used directly in Arduino IDE 2.x for clients who do not use 
 
 ### 3. Import Firmware into Arduino IDE
 
-- Create a new sketch folder (example: `esp32_audio`).
-- Copy the full content of `src/main.cpp` into your sketch `.ino` file.
+- Open the `main/main.ino` sketch in Arduino IDE.
+- If you prefer, copy `main/main.ino` into a new sketch folder (example: `esp32_audio`).
 - Keep all pin mappings and constants unchanged unless your hardware wiring differs.
 
 ### 4. Verify Critical Relay Logic for ULN2003
@@ -347,7 +347,7 @@ This ensures all not-enabled inputs stay high, and only the selected input is dr
 ## Source of Truth
 
 - Request text: [request.md](request.md)
-- Implementation: [src/main.cpp](src/main.cpp)
+- Arduino implementation: [main/main.ino](main/main.ino)
 - Build config: [platformio.ini](platformio.ini)
 
 ## Notes
