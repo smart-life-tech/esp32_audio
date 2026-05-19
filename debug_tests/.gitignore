@@ -1,0 +1,4 @@
+# Exclude all debug test folders from build
+*
+!.gitignore
+!README.md
