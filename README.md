@@ -272,11 +272,11 @@ Configured in [platformio.ini](platformio.ini):
 
 Quick per-component Arduino-format debug sketches are included to test each piece of hardware before running the main firmware. Each test is a self-contained `.ino` sketch in its own folder under `debug_tests/`:
 
-- [debug_tests/i2c/i2c_test.ino](debug_tests/i2c/i2c_test.ino) — **Relay Test** (D2–D9): Toggles all 8 relays one at a time (Phono, CD, Aux1, Aux2, DVD, Tuner, Tape1, Tape2).
-- [debug_tests/pga2311/pga2311_test.ino](debug_tests/pga2311/pga2311_test.ino) — **IR Remote Test** (D10): Receives and decodes RC5/RC5X IR commands.
+- [debug_tests/relay/relay.ino](debug_tests/relay/relay.ino) — **Relay Test** (D2–D9): Toggles all 8 relays one at a time (Phono, CD, Aux1, Aux2, DVD, Tuner, Tape1, Tape2).
+- [debug_tests/ir/ir.ino](debug_tests/ir/ir.ino) — **IR Remote Test** (D10): Receives and decodes RC5/RC5X IR commands.
 - [debug_tests/pga2311_spi/pga2311_spi_test.ino](debug_tests/pga2311_spi/pga2311_spi_test.ino) — **PGA2311 SPI Test** (A1=XCS, D11=DATA, D13=CLK): Verifies SPI communication with chip-select toggles.
-- [debug_tests/audio_output/audio_output_test.ino](debug_tests/audio_output/audio_output_test.ino) — **TFT Display Test** (A4=CS, A5=DC, D11=SID, D13=CLK): Initializes and draws colored rectangles on the HSD028309 TFT.
-- [debug_tests/wifi/wifi_test.ino](debug_tests/wifi/wifi_test.ino) — **Encoder & Buttons Test** (D12=EncoderA, A3=EncoderB, A0=EncoderPush, A2=SourceBtn): Monitors rotary encoder and button presses.
+- [debug_tests/display/display.ino](debug_tests/display/display.ino) — **TFT Display Test** (A4=CS, A5=DC, D11=SID, D13=CLK): Initializes and draws colored rectangles on the HSD028309 TFT.
+- [debug_tests/encoder/encoder.ino](debug_tests/encoder/encoder.ino) — **Encoder & Buttons Test** (D12=EncoderA, A3=EncoderB, A0=EncoderPush, A2=SourceBtn): Monitors rotary encoder and button presses.
 
 ### Running a Debug Test in Arduino IDE
 
