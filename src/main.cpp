@@ -65,7 +65,8 @@ namespace
   bool muted = false;
   bool uiDirty = true;
 
-  uint8_t encoderLastA = HIGH;
+  volatile int16_t encoderPosition = 0;
+  int16_t lastReportedEncoderPos = 0;
   uint32_t encoderLastMoveMs = 0;
 
   struct DebouncedButton
@@ -431,62 +432,109 @@ namespace
     IrReceiver.resume();
   }
 
+  void IRAM_ATTR encoderISR()
+  {
+    static uint32_t lastIsrMs = 0;
+    uint32_t now = millis();
+    if ((now - lastIsrMs) < 2)
+    {
+      return; // simple debounce in ISR
+    }
+    lastIsrMs = now;
+
+    bool a = digitalRead(kEncoderPinA);
+    bool b = digitalRead(kEncoderPinB);
+
+    if (a == b)
+    {
+      encoderPosition++;
+    }
+    else
+    {
+      encoderPosition--;
+    }
+  }
+
   void pollEncoder()
   {
-    bool encoderA = digitalRead(kEncoderPinA);
-    if (encoderA != encoderLastA)
+    int16_t pos = encoderPosition;
+    if (pos != lastReportedEncoderPos)
     {
-      if ((millis() - encoderLastMoveMs) >= kEncoderDebounceMs && encoderA == LOW)
+      int16_t delta = pos - lastReportedEncoderPos;
+      lastReportedEncoderPos = pos;
+
+      while (delta > 0)
       {
-        bool encoderB = digitalRead(kEncoderPinB);
-        if (encoderB == HIGH)
-        {
-          debugLog("ENCODER: CW (volume up)");
-          changeVolume(+1);
-        }
-        else
-        {
-          debugLog("ENCODER: CCW (volume down)");
-          changeVolume(-1);
-        }
-        encoderLastMoveMs = millis();
+        changeVolume(+1);
+        delta--;
       }
-      encoderLastA = encoderA;
+      while (delta < 0)
+      {
+        changeVolume(-1);
+        delta++;
+      }
     }
   }
 
   void drawUi()
   {
-    tft.fillScreen(ILI9341_BLACK);
+    static String prevSource = "";
+    static uint8_t prevVolumePercent = 0xFF;
+    static int16_t prevDbTenths = 0x7FFF;
+    static bool prevMuted = false;
 
-    tft.setTextColor(ILI9341_WHITE, ILI9341_BLACK);
-    tft.setTextSize(5);
-    tft.setCursor(12, 24);
-    tft.print(kSourceNames[currentSource]);
-
-    tft.setTextSize(3);
-    tft.setTextColor(ILI9341_YELLOW, ILI9341_BLACK);
-    tft.setCursor(12, 120);
-    tft.print("Vol: ");
-    uint8_t volumePercent = static_cast<uint8_t>((static_cast<uint16_t>(currentVolume) * 100 + 127) / 255);
-    tft.print(volumePercent);
-    tft.print("%");
-
-    char dbBuffer[16];
-    int16_t dbTenths = muted ? static_cast<int16_t>(-960) : volumeCodeToTenthsDb(currentVolume);
-    int16_t whole = dbTenths / 10;
-    int16_t fraction = abs(dbTenths % 10);
-    snprintf(dbBuffer, sizeof(dbBuffer), "%s%ld.%ld dB", (dbTenths >= 0) ? "+" : "", static_cast<long>(whole), static_cast<long>(fraction));
-
-    tft.setCursor(12, 160);
-    tft.print(dbBuffer);
-
-    if (muted)
+    // Source name (large) - redraw only when it changes
+    String curSource = String(kSourceNames[currentSource]);
+    if (curSource != prevSource)
     {
-      tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
-      tft.setTextSize(4);
-      tft.setCursor(12, 202);
-      tft.print("MUTED");
+      tft.fillRect(0, 0, 320, 56, ILI9341_BLACK);
+      tft.setTextColor(ILI9341_WHITE, ILI9341_BLACK);
+      tft.setTextSize(5);
+      tft.setCursor(12, 24);
+      tft.print(kSourceNames[currentSource]);
+      prevSource = curSource;
+    }
+
+    // Volume percent
+    uint8_t volumePercent = static_cast<uint8_t>((static_cast<uint16_t>(currentVolume) * 100 + 127) / 255);
+    if (volumePercent != prevVolumePercent)
+    {
+      tft.fillRect(0, 110, 320, 40, ILI9341_BLACK);
+      tft.setTextSize(3);
+      tft.setTextColor(ILI9341_YELLOW, ILI9341_BLACK);
+      tft.setCursor(12, 120);
+      tft.print("Vol: ");
+      tft.print(volumePercent);
+      tft.print("%");
+      prevVolumePercent = volumePercent;
+    }
+
+    // dB display
+    int16_t dbTenths = muted ? volumeCodeToTenthsDb(kMuteCode) : volumeCodeToTenthsDb(currentVolume);
+    if (dbTenths != prevDbTenths)
+    {
+      char dbBuffer[16];
+      int16_t whole = dbTenths / 10;
+      int16_t fraction = abs(dbTenths % 10);
+      snprintf(dbBuffer, sizeof(dbBuffer), "%s%ld.%ld dB", (dbTenths >= 0) ? "+" : "", static_cast<long>(whole), static_cast<long>(fraction));
+      tft.fillRect(0, 150, 320, 40, ILI9341_BLACK);
+      tft.setCursor(12, 160);
+      tft.print(dbBuffer);
+      prevDbTenths = dbTenths;
+    }
+
+    // Mute label
+    if (muted != prevMuted)
+    {
+      tft.fillRect(0, 196, 320, 48, ILI9341_BLACK);
+      if (muted)
+      {
+        tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
+        tft.setTextSize(4);
+        tft.setCursor(12, 202);
+        tft.print("MUTED");
+      }
+      prevMuted = muted;
     }
   }
 
@@ -537,6 +585,8 @@ void setup()
 
   pinMode(kEncoderPinA, INPUT_PULLUP);
   pinMode(kEncoderPinB, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(kEncoderPinA), encoderISR, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(kEncoderPinB), encoderISR, CHANGE);
   pinMode(kEncoderButtonPin, INPUT_PULLUP);
   pinMode(kSourceButtonPin, INPUT_PULLUP);
   pinMode(kIrPin, INPUT_PULLUP);
