@@ -1,4 +1,4 @@
-Create a arduino nano ESP32 program to control 8 relay audio sources and control a MAS6116 providing a lcd display for the 8 inputs volume control level and mute on and off functions. using a tft display HSD028309 so it shows source on display and volume number and when unmutes goes back to original volume level, mute goes to  -70db  Pin outs are as follows.
+Create a arduino nano ESP32 program to control 8 relay audio sources and control a PGA2311 providing a lcd display for the 8 inputs volume control level and mute on and off functions. using a tft display HSD028309 so it shows source on display and volume number and when unmutes goes back to original volume level, mute goes to -96db (full chip mute). Pin outs are as follows:
 
  IR remote receive (Philips RC5 / RC5X “extended standard preamp/amplifer commands
 
@@ -15,10 +15,10 @@ Infrared Input
 * D10 = IR receiver 
 
 Shared SPI
-* D11 = COPI/MOSI → MAS6116 DATA + TFT SID
-* D13 = SCK → MAS6116 CCLK + TFT CLK
+* D11 = COPI/MOSI → PGA2311 DATA + TFT SID
+* D13 = SCK → PGA2311 CCLK + TFT CLK
 
-MAS6116
+PGA2311
 * A1 = XCS
 Controls
 * D12 = Encoder A

@@ -3,7 +3,7 @@
 This project implements the full request in [request.md](request.md):
 
 - Control 8 relay-selected audio sources
-- Control a **PGA2311** stereo volume IC over shared SPI (logarithmic gain amplifier)
+- Control a **PGA2311** stereo volume IC over SPI (logarithmic gain amplifier)
 - Show source, volume, and mute status on a TFT display (HSD028309 class, ILI9341 SPI driver)
 - Support IR remote control (Philips RC5 / RC5X-style command set)
 - Support rotary encoder volume control and hardware buttons
@@ -14,10 +14,10 @@ This project implements the full request in [request.md](request.md):
 All requested functional blocks are implemented in [src/main.cpp](src/main.cpp):
 
 1. 8-source relay control: complete
-2. MAS6116 volume control over SPI: complete
+2. PGA2311 volume control over SPI: complete
 3. TFT display of source and volume number: complete
 4. Mute/unmute with restore-to-previous-volume: complete
-5. Mute attenuation target of -70 dB: complete (`kMuteCode = 171`)
+5. Mute attenuation target of -96 dB: complete (full chip mute)
 6. Pin mapping per request: complete
 7. IR command handling for amplifier-style control: complete
 
@@ -43,10 +43,10 @@ All requested functional blocks are implemented in [src/main.cpp](src/main.cpp):
 
 ### Shared SPI
 
-- D11 = COPI/MOSI -> MAS6116 DATA + TFT SID
-- D13 = SCK -> MAS6116 CCLK + TFT CLK
+- D11 = COPI/MOSI -> PGA2311 DATA + TFT SID
+- D13 = SCK -> PGA2311 CCLK + TFT CLK
 
-### MAS6116
+### PGA2311
 
 - A1 = XCS (chip select)
 
@@ -122,7 +122,7 @@ All requested functional blocks are implemented in [src/main.cpp](src/main.cpp):
 - A full register operation is 16 clock pulses while XCS is low:
   - first byte: address byte
   - second byte: gain value (0x00 to 0xFF)
-- **Important**: Left and right channels must be written in separate SPI transactions (unlike MAS6116).
+- **Important**: Left and right channels must be written in separate SPI transactions.
 - For stereo updates:
   - Transaction 1: Write left channel (address 0x00, gain value)
   - 1ms delay
@@ -150,8 +150,8 @@ All requested functional blocks are implemented in [src/main.cpp](src/main.cpp):
 
 ### Operating Modes and Power-Up Notes
 
-- On power-up, MAS6116 internal reset initializes control registers.
-- Channel activation in normal operation requires valid gain values and mute release conditions per datasheet.
+- On power-up, PGA2311 requires a 50ms delay before first SPI operations.
+- Channel activation in normal operation requires valid gain values per datasheet.
 - In this firmware, startup sequence is:
   - load persisted state
   - select active relay source
@@ -210,7 +210,7 @@ If readback values do not match expected startup volume, serial logs clearly ind
 
 - On mute:
   - Current volume is stored (`muteRestoreVolume`)
-  - MAS6116 is set to code `171` (target `-70.0 dB`)
+  - PGA2311 is set to code `0x00` (target `-96.0 dB` full chip mute)
 - On unmute:
   - Previous volume is restored
   - Audio returns to exactly the pre-mute level
@@ -270,24 +270,28 @@ Configured in [platformio.ini](platformio.ini):
 
 ## Debug Tests
 
-Quick per-component Arduino-format debug sketches are included to help verify hardware before running the main firmware. Each test is a self-contained `.ino` sketch in its own folder under `debug_tests/`:
+Quick per-component Arduino-format debug sketches are included to test each piece of hardware before running the main firmware. Each test is a self-contained `.ino` sketch in its own folder under `debug_tests/`:
 
-- [debug_tests/i2c/i2c_test.ino](debug_tests/i2c/i2c_test.ino) — I2C bus scanner.
-- [debug_tests/pga2311/pga2311_test.ino](debug_tests/pga2311/pga2311_test.ino) — PGA2311 I2C probe (default addr `0x44`, change if different).
-- [debug_tests/mas6116/mas6116_test.ino](debug_tests/mas6116/mas6116_test.ino) — MAS6116 control-line toggle (adjust pin inside sketch).
-- [debug_tests/audio_output/audio_output_test.ino](debug_tests/audio_output/audio_output_test.ino) — ESP32 DAC output test (uses DAC pin 25 by default).
-- [debug_tests/wifi/wifi_test.ino](debug_tests/wifi/wifi_test.ino) — Starts a WiFi AP for quick radio/hardware verification.
+- [debug_tests/i2c/i2c_test.ino](debug_tests/i2c/i2c_test.ino) — **Relay Test** (D2–D9): Toggles all 8 relays one at a time (Phono, CD, Aux1, Aux2, DVD, Tuner, Tape1, Tape2).
+- [debug_tests/pga2311/pga2311_test.ino](debug_tests/pga2311/pga2311_test.ino) — **IR Remote Test** (D10): Receives and decodes RC5/RC5X IR commands.
+- [debug_tests/pga2311_spi/pga2311_spi_test.ino](debug_tests/pga2311_spi/pga2311_spi_test.ino) — **PGA2311 SPI Test** (A1=XCS, D11=DATA, D13=CLK): Verifies SPI communication with chip-select toggles.
+- [debug_tests/audio_output/audio_output_test.ino](debug_tests/audio_output/audio_output_test.ino) — **TFT Display Test** (A4=CS, A5=DC, D11=SID, D13=CLK): Initializes and draws colored rectangles on the HSD028309 TFT.
+- [debug_tests/wifi/wifi_test.ino](debug_tests/wifi/wifi_test.ino) — **Encoder & Buttons Test** (D12=EncoderA, A3=EncoderB, A0=EncoderPush, A2=SourceBtn): Monitors rotary encoder and button presses.
 
-Run a single test by selecting its PlatformIO environment and uploading, then open the serial monitor. Example (I2C):
+### Running a Debug Test in Arduino IDE
 
-```bash
-pio run -e debug_i2c -t upload
-pio device monitor -e debug_i2c
-```
+1. Open Arduino IDE 2.x.
+2. Open one of the debug sketches (e.g., `debug_tests/i2c/i2c_test.ino`).
+3. Select board: **Arduino Nano ESP32**.
+4. Select the correct **COM port** for your device.
+5. Click **Verify**, then **Upload**.
+6. Open **Serial Monitor** at `115200` baud to see test results.
 
-Notes:
-- Edit pins and I2C addresses inside each sketch to match your wiring before running.
+### Notes
+
+- All pin assignments in the debug sketches are hard-coded to match the pinout in [request.md](request.md); edit them only if your wiring differs.
 - Older `.cpp`/`.h` test files remain in `debug_tests/` root for reference; remove them if you prefer a single canonical set of sketches.
+- These debug sketches are designed for quick hardware verification only; they halt in `setup()` after running the test or enter an idle loop.
 
 
 ## Arduino IDE Setup and Upload (Client Workflow)
@@ -338,7 +342,7 @@ This ensures all not-enabled inputs stay high, and only the selected input is dr
 ### 6. Serial Monitor (Debug)
 
 - Open Serial Monitor at 115200 baud.
-- On boot you should see startup logs, IR command logs, and MAS6116 initialization verification messages.
+- On boot you should see startup logs, IR command logs, and PGA2311 initialization verification messages.
 
 ## Source of Truth
 
@@ -352,4 +356,4 @@ This ensures all not-enabled inputs stay high, and only the selected input is dr
 - Relay logic is configured as active-low (`kRelayOnLevel = LOW`, `kRelayOffLevel = HIGH`) to support ULN2003-style inverted relay drive.
 - If a different relay board requires active-high control, swap those constants.
 - PGA2311 requires 50ms power-up delay before first SPI operations (handled in setup()).
-- Gain code mapping for PGA2311 is logarithmic (unlike older linear volume ICs). The lookup table accelerates dB calculations for codes 0–16.
+- Gain code mapping for PGA2311 is logarithmic (unlike older linear volume ICs).
