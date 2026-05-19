@@ -475,10 +475,12 @@ namespace
     tft.setTextColor(ILI9341_YELLOW, ILI9341_BLACK);
     tft.setCursor(12, 120);
     tft.print("Vol: ");
-    tft.print(currentVolume);
+    uint8_t volumePercent = static_cast<uint8_t>((static_cast<uint16_t>(currentVolume) * 100 + 127) / 255);
+    tft.print(volumePercent);
+    tft.print("%");
 
     char dbBuffer[16];
-    int16_t dbTenths = muted ? static_cast<int16_t>(-700) : volumeCodeToTenthsDb(currentVolume);
+    int16_t dbTenths = muted ? static_cast<int16_t>(-960) : volumeCodeToTenthsDb(currentVolume);
     int16_t whole = dbTenths / 10;
     int16_t fraction = abs(dbTenths % 10);
     snprintf(dbBuffer, sizeof(dbBuffer), "%s%ld.%ld dB", (dbTenths >= 0) ? "+" : "", static_cast<long>(whole), static_cast<long>(fraction));
@@ -486,10 +488,13 @@ namespace
     tft.setCursor(12, 160);
     tft.print(dbBuffer);
 
-    tft.setTextColor(muted ? ILI9341_RED : ILI9341_GREEN, ILI9341_BLACK);
-    tft.setTextSize(4);
-    tft.setCursor(12, 202);
-    tft.print(muted ? "MUTED" : "LIVE");
+    if (muted)
+    {
+      tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
+      tft.setTextSize(4);
+      tft.setCursor(12, 202);
+      tft.print("MUTED");
+    }
   }
 
   void pollButtons()
