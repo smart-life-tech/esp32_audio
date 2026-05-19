@@ -268,6 +268,28 @@ Configured in [platformio.ini](platformio.ini):
   - `adafruit/Adafruit ILI9341`
   - `z3t0/IRremote`
 
+## Debug Tests
+
+Quick per-component Arduino-format debug sketches are included to help verify hardware before running the main firmware. Each test is a self-contained `.ino` sketch in its own folder under `debug_tests/`:
+
+- [debug_tests/i2c/i2c_test.ino](debug_tests/i2c/i2c_test.ino) — I2C bus scanner.
+- [debug_tests/pga2311/pga2311_test.ino](debug_tests/pga2311/pga2311_test.ino) — PGA2311 I2C probe (default addr `0x44`, change if different).
+- [debug_tests/mas6116/mas6116_test.ino](debug_tests/mas6116/mas6116_test.ino) — MAS6116 control-line toggle (adjust pin inside sketch).
+- [debug_tests/audio_output/audio_output_test.ino](debug_tests/audio_output/audio_output_test.ino) — ESP32 DAC output test (uses DAC pin 25 by default).
+- [debug_tests/wifi/wifi_test.ino](debug_tests/wifi/wifi_test.ino) — Starts a WiFi AP for quick radio/hardware verification.
+
+Run a single test by selecting its PlatformIO environment and uploading, then open the serial monitor. Example (I2C):
+
+```bash
+pio run -e debug_i2c -t upload
+pio device monitor -e debug_i2c
+```
+
+Notes:
+- Edit pins and I2C addresses inside each sketch to match your wiring before running.
+- Older `.cpp`/`.h` test files remain in `debug_tests/` root for reference; remove them if you prefer a single canonical set of sketches.
+
+
 ## Arduino IDE Setup and Upload (Client Workflow)
 
 This project can be used directly in Arduino IDE 2.x for clients who do not use PlatformIO.
