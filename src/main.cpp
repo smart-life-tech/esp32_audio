@@ -436,9 +436,9 @@ namespace
   {
     static uint32_t lastIsrMs = 0;
     uint32_t now = millis();
-    if ((now - lastIsrMs) < 2)
+    if ((now - lastIsrMs) < 1)  // tighter debounce for faster response
     {
-      return; // simple debounce in ISR
+      return;
     }
     lastIsrMs = now;
 
@@ -463,6 +463,7 @@ namespace
       int16_t delta = pos - lastReportedEncoderPos;
       lastReportedEncoderPos = pos;
 
+      // Batch multiple steps for snappier response (scale: steps * 1)
       while (delta > 0)
       {
         changeVolume(+1);
