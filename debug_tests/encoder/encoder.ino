@@ -1,89 +1,109 @@
-// Encoder and Buttons Test
-// D12 = Encoder A
-// A3 = Encoder B
-// A0 = Encoder push switch
-// A2 = Source button
 #include <Arduino.h>
-static const int ENCODER_A_PIN = 12;
-static const int ENCODER_B_PIN = A3;
-static const int ENCODER_PUSH_PIN = A0;
-static const int SOURCE_BTN_PIN = A2;
 
-volatile int encoderCount = 0;
-volatile uint32_t lastIsrMs = 0;
+#define CLK_PIN 12
+#define DT_PIN A3
+#define SW_PIN A0
+#define SRC_BTN_PIN A2
 
-void IRAM_ATTR encoderISR() {
-  // Simple debounce: ignore rapid successive calls
-  uint32_t now = millis();
-  if ((now - lastIsrMs) < 3) {
+#define DIRECTION_CW 0
+#define DIRECTION_CCW 1
+
+volatile int counter = 0;
+volatile int direction = DIRECTION_CW;
+volatile uint8_t lastEncoderState = 0;
+
+int prev_counter = 0;
+int last_button_state = HIGH;
+int last_source_state = HIGH;
+unsigned long last_button_time = 0;
+unsigned long last_source_time = 0;
+const unsigned long BUTTON_DEBOUNCE_MS = 50;
+
+void encoderISR() {
+  uint8_t a = digitalRead(CLK_PIN);
+  uint8_t b = digitalRead(DT_PIN);
+  uint8_t state = (a << 1) | b;
+
+  if (state == lastEncoderState) {
     return;
   }
-  lastIsrMs = now;
 
-  // Read both pins to determine direction
-  bool a = digitalRead(ENCODER_A_PIN);
-  bool b = digitalRead(ENCODER_B_PIN);
-
-  // Quadrature logic: if A and B same -> CW, else CCW
-  if (a == b) {
-    encoderCount++;
-  } else {
-    encoderCount--;
+  uint8_t diff = (lastEncoderState - state) & 0x03;
+  if (diff == 1) {
+    counter++;
+    direction = DIRECTION_CW;
+  } else if (diff == 3) {
+    counter--;
+    direction = DIRECTION_CCW;
   }
+
+  lastEncoderState = state;
 }
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
   while (!Serial) delay(10);
-  Serial.println("=== ENCODER & BUTTONS TEST ===");
-  
-  pinMode(ENCODER_A_PIN, INPUT_PULLUP);
-  pinMode(ENCODER_B_PIN, INPUT_PULLUP);
-  pinMode(ENCODER_PUSH_PIN, INPUT_PULLUP);
-  pinMode(SOURCE_BTN_PIN, INPUT_PULLUP);
-  
-  // Attach interrupt to both encoder pins for responsive detection
-  attachInterrupt(digitalPinToInterrupt(ENCODER_A_PIN), encoderISR, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(ENCODER_B_PIN), encoderISR, CHANGE);
-  
-  Serial.println("Encoder on D12 (A) / A3 (B)");
-  Serial.println("Encoder push on A0");
-  Serial.println("Source button on A2");
-  Serial.println("Rotate encoder or press buttons...");
+
+  pinMode(CLK_PIN, INPUT_PULLUP);
+  pinMode(DT_PIN, INPUT_PULLUP);
+  pinMode(SW_PIN, INPUT_PULLUP);
+  pinMode(SRC_BTN_PIN, INPUT_PULLUP);
+
+  lastEncoderState = (digitalRead(CLK_PIN) << 1) | digitalRead(DT_PIN);
+
+  attachInterrupt(digitalPinToInterrupt(CLK_PIN), encoderISR, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(DT_PIN), encoderISR, CHANGE);
+
+  Serial.println("Encoder test on D12/A3, push=A0, source=A2");
 }
 
-int lastCount = 0;
-int lastEncoderPush = HIGH;
-int lastSourceBtn = HIGH;
-
 void loop() {
-  if (encoderCount != lastCount) {
-    int delta = encoderCount - lastCount;
-    Serial.print("Encoder moved: ");
-    Serial.print(delta > 0 ? "CW +" : "CCW ");
-    Serial.print(delta);
-    Serial.print("  Total count: ");
-    Serial.println(encoderCount);
-    lastCount = encoderCount;
+  unsigned long now = millis();
+  int button_state = digitalRead(SW_PIN);
+  int source_state = digitalRead(SRC_BTN_PIN);
+
+  if (button_state != last_button_state) {
+    last_button_time = now;
+    last_button_state = button_state;
   }
-  
-  int enPush = digitalRead(ENCODER_PUSH_PIN);
-  if (enPush != lastEncoderPush) {
-    lastEncoderPush = enPush;
-    if (enPush == LOW) {
-      Serial.println("Encoder push button pressed!");
+
+  if (button_state == LOW && (now - last_button_time) >= BUTTON_DEBOUNCE_MS) {
+    Serial.println("Encoder push button pressed");
+    while (digitalRead(SW_PIN) == LOW) {
+      delay(5);
     }
-    delay(20); // debounce
+    last_button_state = HIGH;
+    last_button_time = millis();
   }
-  
-  int srcBtn = digitalRead(SOURCE_BTN_PIN);
-  if (srcBtn != lastSourceBtn) {
-    lastSourceBtn = srcBtn;
-    if (srcBtn == LOW) {
-      Serial.println("Source button pressed!");
+
+  if (source_state != last_source_state) {
+    last_source_time = now;
+    last_source_state = source_state;
+  }
+
+  if (source_state == LOW && (now - last_source_time) >= BUTTON_DEBOUNCE_MS) {
+    Serial.println("Source button pressed");
+    while (digitalRead(SRC_BTN_PIN) == LOW) {
+      delay(5);
     }
-    delay(20); // debounce
+    last_source_state = HIGH;
+    last_source_time = millis();
   }
-  
-  delay(50);
+
+  int currentCount;
+  int currentDirection;
+  noInterrupts();
+  currentCount = counter;
+  currentDirection = direction;
+  interrupts();
+
+  if (prev_counter != currentCount) {
+    Serial.print("DIRECTION: ");
+    Serial.print(currentDirection == DIRECTION_CW ? "Clockwise" : "Counter-clockwise");
+    Serial.print(" | COUNTER: ");
+    Serial.println(currentCount);
+    prev_counter = currentCount;
+  }
+
+  delay(10);
 }
