@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <SPI.h>
+#include <Encoder.h>
 
 #define DECODE_RC5
 #include <IRremote.hpp>
@@ -65,8 +66,8 @@ namespace
   bool muted = false;
   bool uiDirty = true;
 
-  uint8_t encoderLastA = HIGH;
-  uint32_t encoderLastMoveMs = 0;
+  Encoder myEnc{kEncoderPinA, kEncoderPinB};
+  long lastReportedEncoderPos = 0;
 
   struct DebouncedButton
   {
@@ -433,63 +434,85 @@ namespace
 
   void pollEncoder()
   {
-    bool encoderA = digitalRead(kEncoderPinA);
-    if (encoderA != encoderLastA)
+    long pos = myEnc.read();
+    if (pos != lastReportedEncoderPos)
     {
-      if ((millis() - encoderLastMoveMs) >= kEncoderDebounceMs && encoderA == LOW)
+      long delta = pos - lastReportedEncoderPos;
+      lastReportedEncoderPos = pos;
+
+      while (delta > 0)
       {
-        bool encoderB = digitalRead(kEncoderPinB);
-        if (encoderB == HIGH)
-        {
-          debugLog("ENCODER: CW (volume up)");
-          changeVolume(+1);
-        }
-        else
-        {
-          debugLog("ENCODER: CCW (volume down)");
-          changeVolume(-1);
-        }
-        encoderLastMoveMs = millis();
+        changeVolume(+1);
+        delta--;
       }
-      encoderLastA = encoderA;
+      while (delta < 0)
+      {
+        changeVolume(-1);
+        delta++;
+      }
     }
   }
 
   void drawUi()
   {
-    tft.fillScreen(ILI9341_BLACK);
+    static String prevSource = "";
+    static uint8_t prevVolumePercent = 0xFF;
+    static int16_t prevDbTenths = 0x7FFF;
+    static bool prevMuted = false;
 
-    tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
-    tft.setTextSize(3);
-    tft.setCursor(12, 12);
-    tft.print("Source ");
-    tft.print(currentSource + 1);
-    tft.print("/8");
+    // Source name (large) - redraw only when it changes
+    String curSource = String(kSourceNames[currentSource]);
+    if (curSource != prevSource)
+    {
+      tft.fillRect(0, 0, 320, 56, ILI9341_BLACK);
+      tft.setTextColor(ILI9341_WHITE, ILI9341_BLACK);
+      tft.setTextSize(5);
+      tft.setCursor(12, 24);
+      tft.print(kSourceNames[currentSource]);
+      prevSource = curSource;
+    }
 
-    tft.setTextColor(ILI9341_WHITE, ILI9341_BLACK);
-    tft.setTextSize(4);
-    tft.setCursor(12, 56);
-    tft.print(kSourceNames[currentSource]);
+    // Volume percent
+    uint8_t volumePercent = static_cast<uint8_t>((static_cast<uint16_t>(currentVolume) * 100 + 127) / 255);
+    if (volumePercent != prevVolumePercent)
+    {
+      tft.fillRect(0, 110, 320, 40, ILI9341_BLACK);
+      tft.setTextSize(3);
+      tft.setTextColor(ILI9341_YELLOW, ILI9341_BLACK);
+      tft.setCursor(12, 120);
+      tft.print("Vol: ");
+      tft.print(volumePercent);
+      tft.print("%");
+      prevVolumePercent = volumePercent;
+    }
 
-    tft.setTextSize(3);
-    tft.setTextColor(ILI9341_YELLOW, ILI9341_BLACK);
-    tft.setCursor(12, 120);
-    tft.print("Vol: ");
-    tft.print(currentVolume);
+    // dB display
+    int16_t dbTenths = muted ? volumeCodeToTenthsDb(kMuteCode) : volumeCodeToTenthsDb(currentVolume);
+    if (dbTenths != prevDbTenths)
+    {
+      char dbBuffer[16];
+      int16_t whole = dbTenths / 10;
+      int16_t fraction = abs(dbTenths % 10);
+      snprintf(dbBuffer, sizeof(dbBuffer), "%s%ld.%ld dB", (dbTenths >= 0) ? "+" : "", static_cast<long>(whole), static_cast<long>(fraction));
+      tft.fillRect(0, 150, 320, 40, ILI9341_BLACK);
+      tft.setCursor(12, 160);
+      tft.print(dbBuffer);
+      prevDbTenths = dbTenths;
+    }
 
-    char dbBuffer[16];
-    int16_t dbTenths = muted ? static_cast<int16_t>(-700) : volumeCodeToTenthsDb(currentVolume);
-    int16_t whole = dbTenths / 10;
-    int16_t fraction = abs(dbTenths % 10);
-    snprintf(dbBuffer, sizeof(dbBuffer), "%s%ld.%ld dB", (dbTenths >= 0) ? "+" : "", static_cast<long>(whole), static_cast<long>(fraction));
-
-    tft.setCursor(12, 160);
-    tft.print(dbBuffer);
-
-    tft.setTextColor(muted ? ILI9341_RED : ILI9341_GREEN, ILI9341_BLACK);
-    tft.setTextSize(4);
-    tft.setCursor(12, 202);
-    tft.print(muted ? "MUTED" : "LIVE");
+    // Mute label
+    if (muted != prevMuted)
+    {
+      tft.fillRect(0, 196, 320, 48, ILI9341_BLACK);
+      if (muted)
+      {
+        tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
+        tft.setTextSize(4);
+        tft.setCursor(12, 202);
+        tft.print("MUTED");
+      }
+      prevMuted = muted;
+    }
   }
 
   void pollButtons()

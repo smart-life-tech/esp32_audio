@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <SPI.h>
+#include <Encoder.h>
 
 #define DECODE_RC5
 #include <IRremote.hpp>
@@ -65,9 +66,8 @@ namespace
   bool muted = false;
   bool uiDirty = true;
 
-  volatile int16_t encoderPosition = 0;
-  int16_t lastReportedEncoderPos = 0;
-  uint32_t encoderLastMoveMs = 0;
+  Encoder myEnc{kEncoderPinA, kEncoderPinB};
+  long lastReportedEncoderPos = 0;
 
   struct DebouncedButton
   {
@@ -432,35 +432,12 @@ namespace
     IrReceiver.resume();
   }
 
-  void IRAM_ATTR encoderISR()
-  {
-    static uint32_t lastIsrMs = 0;
-    uint32_t now = millis();
-    if ((now - lastIsrMs) < 2)
-    {
-      return; // simple debounce in ISR
-    }
-    lastIsrMs = now;
-
-    bool a = digitalRead(kEncoderPinA);
-    bool b = digitalRead(kEncoderPinB);
-
-    if (a == b)
-    {
-      encoderPosition++;
-    }
-    else
-    {
-      encoderPosition--;
-    }
-  }
-
   void pollEncoder()
   {
-    int16_t pos = encoderPosition;
+    long pos = myEnc.read();
     if (pos != lastReportedEncoderPos)
     {
-      int16_t delta = pos - lastReportedEncoderPos;
+      long delta = pos - lastReportedEncoderPos;
       lastReportedEncoderPos = pos;
 
       while (delta > 0)
@@ -585,8 +562,6 @@ void setup()
 
   pinMode(kEncoderPinA, INPUT_PULLUP);
   pinMode(kEncoderPinB, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(kEncoderPinA), encoderISR, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(kEncoderPinB), encoderISR, CHANGE);
   pinMode(kEncoderButtonPin, INPUT_PULLUP);
   pinMode(kSourceButtonPin, INPUT_PULLUP);
   pinMode(kIrPin, INPUT_PULLUP);

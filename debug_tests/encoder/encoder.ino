@@ -1,63 +1,39 @@
 #include <Arduino.h>
+#include <Encoder.h>  // https://github.com/PaulStoffregen/Encoder/tree/master
 
 #define CLK_PIN 12
 #define DT_PIN A3
 #define SW_PIN A0
 #define SRC_BTN_PIN A2
 
-#define DIRECTION_CW 0
-#define DIRECTION_CCW 1
+Encoder myEnc(CLK_PIN, DT_PIN);
+long oldPosition = -999;
 
-volatile int counter = 0;
-volatile int direction = DIRECTION_CW;
-volatile uint8_t lastEncoderState = 0;
-
-int prev_counter = 0;
 int last_button_state = HIGH;
 int last_source_state = HIGH;
 unsigned long last_button_time = 0;
 unsigned long last_source_time = 0;
 const unsigned long BUTTON_DEBOUNCE_MS = 50;
 
-void encoderISR() {
-  uint8_t a = digitalRead(CLK_PIN);
-  uint8_t b = digitalRead(DT_PIN);
-  uint8_t state = (a << 1) | b;
-
-  if (state == lastEncoderState) {
-    return;
-  }
-
-  uint8_t diff = (lastEncoderState - state) & 0x03;
-  if (diff == 1) {
-    counter++;
-    direction = DIRECTION_CW;
-  } else if (diff == 3) {
-    counter--;
-    direction = DIRECTION_CCW;
-  }
-
-  lastEncoderState = state;
-}
-
 void setup() {
   Serial.begin(9600);
   while (!Serial) delay(10);
 
-  pinMode(CLK_PIN, INPUT_PULLUP);
-  pinMode(DT_PIN, INPUT_PULLUP);
   pinMode(SW_PIN, INPUT_PULLUP);
   pinMode(SRC_BTN_PIN, INPUT_PULLUP);
 
-  lastEncoderState = (digitalRead(CLK_PIN) << 1) | digitalRead(DT_PIN);
-
-  attachInterrupt(digitalPinToInterrupt(CLK_PIN), encoderISR, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(DT_PIN), encoderISR, CHANGE);
-
-  Serial.println("Encoder test on D12/A3, push=A0, source=A2");
+  Serial.println("Basic Encoder Test:");
+  Serial.println("Encoder on D12/A3, push=A0, source=A2");
 }
 
 void loop() {
+  long newPosition = myEnc.read();
+  if (newPosition != oldPosition) {
+    oldPosition = newPosition;
+    Serial.print("Encoder position: ");
+    Serial.println(newPosition);
+  }
+
   unsigned long now = millis();
   int button_state = digitalRead(SW_PIN);
   int source_state = digitalRead(SRC_BTN_PIN);
@@ -88,21 +64,6 @@ void loop() {
     }
     last_source_state = HIGH;
     last_source_time = millis();
-  }
-
-  int currentCount;
-  int currentDirection;
-  noInterrupts();
-  currentCount = counter;
-  currentDirection = direction;
-  interrupts();
-
-  if (prev_counter != currentCount) {
-    Serial.print("DIRECTION: ");
-    Serial.print(currentDirection == DIRECTION_CW ? "Clockwise" : "Counter-clockwise");
-    Serial.print(" | COUNTER: ");
-    Serial.println(currentCount);
-    prev_counter = currentCount;
   }
 
   delay(10);
